@@ -10,7 +10,14 @@ type RedisLogger interface {
 }
 
 func NewRedisLogger(client redisapi.Redis, maxCacheCnt int, idleFlushIntervalSeconds int) RedisLogger {
-	logger := &RedisLoggerImpl{client: client, logMgrMap: make(map[string]*LogMgr), chanLogEntity: make(chan LogEntity), flushAllChan: make(chan int)}
+	logger := &RedisLoggerImpl{client: client,
+		logMgrMap:                make(map[string]*LogMgr),
+		chanLogEntity:            make(chan LogEntity),
+		flushAllChan:             make(chan bool),
+		idleFlushAllChan:         make(chan string),
+		maxCacheCnt:              maxCacheCnt,
+		idleFlushIntervalSeconds: idleFlushIntervalSeconds,
+	}
 	logger.startRedisLogger()
 	return logger
 }

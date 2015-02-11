@@ -3,8 +3,8 @@ package redislog
 import (
 	"encoding/json"
 	"github.com/0studio/redisapi"
-	"github.com/0studio/scheduler"
 	log "github.com/cihub/seelog"
+	"time"
 )
 
 type RedisLoggerImpl struct {
@@ -12,9 +12,10 @@ type RedisLoggerImpl struct {
 	// key=redis.key
 	logMgrMap                map[string]*LogMgr
 	chanLogEntity            chan LogEntity
-	flushAllChan             chan int
-	maxCacheCnt              int // 如果log 积累到100条 则flush 一次
-	idleFlushIntervalSeconds int // 如果60秒没flush 过 ，则执行一次flush 操作
+	flushAllChan             chan bool
+	idleFlushAllChan         chan string // key
+	maxCacheCnt              int         // 如果log 积累到100条 则flush 一次
+	idleFlushIntervalSeconds int         // 如果60秒没flush 过 ，则执行一次flush 操作
 }
 
 func (logger *RedisLoggerImpl) startRedisLogger() {
@@ -30,9 +31,62 @@ func (logger *RedisLoggerImpl) startRedisLogger() {
 				}
 			case <-logger.flushAllChan:
 				logger.flushAll()
+			case key := <-logger.idleFlushAllChan:
+				logMgr, ok := logger.logMgrMap[key]
+				if ok {
+					logMgr.flushIfIdle()
+				}
 			}
 		}
 	}()
+}
+
+func (instance *RedisLoggerImpl) FlushAll() {
+	instance.flushAllChan <- true
+}
+
+func (instance *RedisLoggerImpl) flushAll() {
+	for key, _ := range instance.logMgrMap {
+		instance.logMgrMap[key].flush()
+	}
+}
+
+func (instance *RedisLoggerImpl) AddLog(key string, value interface{}) {
+	instance.chanLogEntity <- LogEntity{key: key, value: value}
+}
+func (instance *RedisLoggerImpl) addLog(key string, value interface{}) bool {
+	logMgr, ok := instance.logMgrMap[key]
+	if !ok {
+		logMgr = defaultLogEntity(key, instance, instance.maxCacheCnt, instance.idleFlushIntervalSeconds)
+		instance.logMgrMap[key] = logMgr
+		instance.startTimerFlush(key)
+	}
+
+	return logMgr.addLog(value)
+}
+
+func (instance *RedisLoggerImpl) startTimerFlush(key string) {
+	var interval int = instance.idleFlushIntervalSeconds / 5
+	if interval == 0 {
+		interval = instance.idleFlushIntervalSeconds
+	}
+
+	go func() {
+
+		for {
+			select {
+			case <-time.After(time.Duration(interval) * time.Second):
+				instance.idleFlushAllChan <- key
+			}
+		}
+	}()
+}
+func getJsonByte(value interface{}) []byte {
+	redisMsg, err := json.Marshal(value)
+	if err != nil {
+		return nil
+	}
+	return redisMsg
 }
 
 func (logger *RedisLoggerImpl) pushRedis(key string, values LogList) bool {
@@ -45,43 +99,4 @@ func (logger *RedisLoggerImpl) pushRedis(key string, values LogList) bool {
 		return false
 	}
 	return true
-}
-
-func (instance *RedisLoggerImpl) FlushAll() {
-	instance.flushAllChan <- 0
-}
-func (instance *RedisLoggerImpl) AddLog(key string, value interface{}) {
-	instance.chanLogEntity <- LogEntity{key: key, value: value}
-}
-
-func (instance *RedisLoggerImpl) addLog(key string, value interface{}) bool {
-	logMgr, ok := instance.logMgrMap[key]
-	if !ok {
-		logMgr = defaultLogEntity(key, instance, instance.maxCacheCnt, instance.idleFlushIntervalSeconds)
-		instance.logMgrMap[key] = logMgr
-		instance.startTimerFlush(key)
-	}
-
-	return logMgr.addLog(value)
-}
-
-func (instance *RedisLoggerImpl) flushAll() {
-	for key, _ := range instance.logMgrMap {
-		instance.logMgrMap[key].flush()
-	}
-}
-
-func (instance *RedisLoggerImpl) startTimerFlush(key string) {
-	scheduler.InitScheduler(key, instance.idleFlushIntervalSeconds/2, instance.idleFlushIntervalSeconds/2,
-		func(s *scheduler.Scheduler) {
-			keyParam := s.ID.(string)
-			instance.logMgrMap[keyParam].flushIfIdle()
-		}).Start()
-}
-func getJsonByte(value interface{}) []byte {
-	redisMsg, err := json.Marshal(value)
-	if err != nil {
-		return nil
-	}
-	return redisMsg
 }
