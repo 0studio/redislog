@@ -2,6 +2,7 @@ package redislog
 
 import (
 	"encoding/json"
+	"fmt"
 	"github.com/0studio/redisapi"
 	log "github.com/cihub/seelog"
 	"time"
@@ -82,11 +83,17 @@ func (instance *RedisLoggerImpl) startTimerFlush(key string) {
 	}()
 }
 func getJsonByte(value interface{}) []byte {
-	redisMsg, err := json.Marshal(value)
-	if err != nil {
-		return nil
+	switch value.(type) {
+	case string:
+		return []byte(value.(string))
+	default:
+		redisMsg, err := json.Marshal(value)
+		if err != nil {
+			return nil
+		}
+		fmt.Println("redisMsg", redisMsg)
+		return redisMsg
 	}
-	return redisMsg
 }
 
 func (logger *RedisLoggerImpl) pushRedis(key string, values LogList) bool {
